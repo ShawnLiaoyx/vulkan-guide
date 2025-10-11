@@ -87,6 +87,10 @@ This isnt taking a float* or similar, so we need to first load our values into S
 Using them, we have our vector addition, and it looks like this.
 
 ```cpp
+
+//need to grab intrinsics header
+#include <immintrin.h>
+
 //Adds B to A. The arrays must have the same size
 void add_arrays_sse(float* A, float* B, size_t count){
     size_t i = 0;
@@ -109,6 +113,10 @@ We are using a bit of vector math to index the arrays for the `_mm_load_ps`, loa
 But this is the SSE version, which is 4-wide. What if we want to do it as 8-wide using AVX? We go back to the intrinsic reference, and find the avx version of the same load, store, and add functions. This gives us `_mm256_load_ps`, `_mm256_store_ps`, and ` _mm256_add_ps`, same thing, but using `__mm256` vector variables instead of the `__mm128` ones, so 8 floats, not 4. Loop looks like this
 
 ```cpp
+
+//need to grab intrinsics header
+#include <immintrin.h>
+
 //Adds B to A. The arrays must have the same size
 void add_arrays_avx(float* A, float* B, size_t count){
     size_t i = 0;
@@ -131,6 +139,8 @@ In general, for most basic operations, AVX is just SSE but doubled. There are so
 If you want to see how NEON would work, you look at the ARM reference instead of the Intel one [NEON Intrinsics](https://developer.arm.com/documentation/den0018/a/NEON-Intrinsics). You will find the actual instruction table on the left menu, `Neon Intrinsics Reference` section  The NEON version of this addition loop looks like this
 
 ```cpp
+#include <arm_neon.h>
+
 //Adds B to A. The arrays must have the same size
 void add_arrays_neon(float* A, float* B, size_t count){
     size_t i = 0;
