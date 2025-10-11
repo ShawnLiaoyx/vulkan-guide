@@ -12,8 +12,8 @@
   background: $link-color;
 }
 
-html {
-  @include fs-4;
+:root {
+  font-size: 1rem;
 }
 
 body {
@@ -86,8 +86,14 @@ a:not([class]) {
 
 code {
   font-family: $mono-font-family;
-  font-size: 12px;
-  line-height: $body-line-height;
+  font-size: 1rem;
+  /* This was set to $body-line-height, but normal is a sane default. We could
+   * restore the previous value if the lines end up being too narrow. */
+  line-height: normal;
+
+  background-color: $code-background-color;
+  border: $border $border-color;
+  border-radius: $border-radius;
 }
 
 figure,

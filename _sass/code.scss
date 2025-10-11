@@ -3,17 +3,6 @@
 //
 // stylelint-disable selector-no-qualifying-type, declaration-block-semicolon-newline-after,declaration-block-single-line-max-declarations, selector-no-type, selector-max-type
 
-code {
-  
-  padding: 0.0em 0.0em;
-  font-weight: 400;
-  background-color: $code-background-color;
-  border: $border $border-color;
-  border-radius: $border-radius;
-  line-height: 1.0;
-  tab-size: 4;
-}
-
 pre.highlight,
 figure.highlight {
   padding: $sp-3;
@@ -21,10 +10,7 @@ figure.highlight {
   -webkit-overflow-scrolling: touch;
   background-color: $code-background-color;
   tab-size: 4;
-  line-height: 1.0;
   code {
-    tab-size: 4;
-    line-height: 1.0;
     padding: 0;
     border: 0;
   }
@@ -254,12 +240,10 @@ figure.highlight {
   overflow: auto;
   border: 1px solid $border-color;
   border-radius: $border-radius;
-  line-height: 1;
   tab-size: 4;
   + .highlighter-rouge,
   + figure.highlight {
     tab-size: 4;
-    line-height: 1.0;
     position: relative;
     margin-top: -$sp-4;
     border-right: 1px solid $border-color;
