@@ -47,7 +47,6 @@ void add_arrays(float* A, float* B, size_t count){
         A[i] += B[i]; 
     }
 }
-
 ```
 
 This is a very simple function where we have 2 arrays of floats and we add the second one to the first. We will be using SSE4 for this, which does operations 4 numbers at a time, so to think of it, lets unroll this code in sets of 4
@@ -144,4 +143,96 @@ void add_arrays_neon(float* A, float* B, size_t count){
 }
 ``` 
 Its the same as the SSE version, but with the variable types and function names all changed into a completely different style.
+
+# 4x4 Matmul
+There is limited usefulness to just adding 2 large arrays of floats together. Lets now look at something that is an actual real use case for vectors, Multiplying 4x4 matrices with each other. This is something that is seen constantly on transform systems and its a hot path of animation code. Its also a good use case of using SIMD intrinsics to make a single thing faster, instead of running 4 things at the same time. 
+
+When writing SIMD, we generally have 2 main options on how to deal with the operations. We can do what is known as `vertical` SIMD, where we use the SIMD operations to optimize 1 thing, or we can do `horizontal` SIMD where we instead use SIMD to do the same operation but N times in parallel. The addition loop above is a example of horizontal simd, as we are doing the same operation (add 2 numbers) but 4 or 8 times at once. For this matrix multiplication, we could do it in horizontal too, but that means we would need to multiply 8 matrices by another 8 matrices, or 8 matrices by a single one. This has limited usage compared to just multiplying 1 matrix faster, so lets look at what a matrix multiply does, and how can we make it faster.
+
+To mirror the vulkan tutorial, we will be using the GLM library matrices. GLM already has sse4 optimized matrixmul somewhere in the codebase, but we are going to create our own version of it. Lets begin by writing the non-simd loop and see what kind of logic we are dealing with.
+
+```cpp
+void matmul4x4(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            for (int k = 0; k < 4; k++) {
+                result[i][j] += m1[k][j] * m2[i][k];
+            }
+        }
+    }
+}
+```
+
+We have a set of nested for loops, so its not quite so clear how can we vectorize this. To vectorize it, we need to find a way of writing the logic so that we can write the data as direct rows of 4 float at a time (the `j` axis on the result). SIMD loads and stores are contiguous, so for our algorithms we always need to find a way to arrange the calculations to load contiguous values and store contiguous values. Its also important to remember that moving data into vector registers can be a bit slow, so we must find a way to load as much data into simd variables as possible, and do all the operations on them directly, then store the result out. If we are moving from scalar land into vector land constnatly we end up losing all the performance wins from vectors.
+
+We need to go at a bit higher level of abstraction to think about the algorithm properly, and think what operations are needed here for vectorization.
+In a matrix multiplication, for each of the elements in the matrix, we are doing a dot product of the row of one matrix and the column of another. One possible way of vectorizing a matrix mul could take advantage of it, loading one column from a matrix, a row from the other one, and calling `_mm_dp_ps` to do a dot product. This is not that recomended for a case like a matrixmul because SIMD operations that work across the lanes of the simd register end to be high in latency and slower than simd operations that are per-lane fully parallel. 
+
+But we could try to do 4 dot products at once. Looking at the algorithm, we can grab a column from one matrix, then grab the 4 rows of the other one, and multiply everything together like that, doing 4 dot products at a time and then writing 4 values at a time to the result matrix.
+
+To load an entire matrix, we can do 4 load calls, one per row, and just store them as 4 variables. Or rows are stored contiguously, so its a good fit to do it this way.
+
+```cpp
+    //load the entire m1 matrix to simd registers
+    __m128  vx = _mm_load_ps(&m1[0][0]);
+    __m128  vy = _mm_load_ps(&m1[1][0]);
+    __m128  vz = _mm_load_ps(&m1[2][0]);
+    __m128  vw = _mm_load_ps(&m1[3][0]);
+```
+
+The other piece we need is to load a single column into 4 simd registers, with the numbers duplicated. We can do multiple scalar loads, but thats actually a bit slower than loading once and then rearranging the memory a bit with shuffles.
+
+```cpp
+__m128 col = _mm_load_ps(&m2[i][0]);
+
+__m128 x = _mm_shuffle_ps(col,col, _MM_SHUFFLE(0, 0, 0, 0));
+__m128 y = _mm_shuffle_ps(col,col, _MM_SHUFFLE(1, 1, 1, 1));
+__m128 z = _mm_shuffle_ps(col,col, _MM_SHUFFLE(2, 2, 2, 2));
+__m128 w = _mm_shuffle_ps(col,col, _MM_SHUFFLE(3, 3, 3, 3));
+```
+
+The shuffle instruction lets us move around the values of a simd register. This snippet loads the column once, and then converts it into 4 simd registers, with the first being "x,x,x,x", second being "y,y,y,y" and so on. This is a very common technique, and if you target avx you can do it with the `_mm_permute_ps` which works similar.
+
+The last part of the algorithm is to perform the actual dot product calculation, 4 of them at once, and store the result
+
+```cpp
+ __m128 result_col = _mm_mul_ps(vx, x);
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(vy, y));
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(vz, z));
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(vw, w));
+
+        _mm_store_ps(&out[i][0], result_col);
+```
+
+The full algorithm looks like this.
+```cpp
+void matmul4x4(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
+    //load the entire m1 matrix to simd registers
+    __m128  vx = _mm_load_ps(&m1[0][0]);
+    __m128  vy = _mm_load_ps(&m1[1][0]);
+    __m128  vz = _mm_load_ps(&m1[2][0]);
+    __m128  vw = _mm_load_ps(&m1[3][0]);
+
+     for (int i = 0; i < 4; i++) {
+        //load a row and widen it
+        __m128 col = _mm_load_ps(&m2[i][0]);
+
+        __m128 x = _mm_shuffle_ps(col,col, _MM_SHUFFLE(0, 0, 0, 0));
+        __m128 y = _mm_shuffle_ps(col,col, _MM_SHUFFLE(1, 1, 1, 1));
+        __m128 z = _mm_shuffle_ps(col,col, _MM_SHUFFLE(2, 2, 2, 2));
+        __m128 w = _mm_shuffle_ps(col,col, _MM_SHUFFLE(3, 3, 3, 3));
+
+        //dot products
+        __m128 result_col = _mm_mul_ps(vx, x);
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(vy, y));
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(vz, z));
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(vw, w));
+
+        _mm_store_ps(&out[i][0], result_col);
+    }
+}
+```
+
+There are actually a fair few ways of doing a 4x4 matmul, as it can change depending on how your matrix is laid out in memory. This version works for how GLM does things, and its similar to how they themselves vectorize it.
 
