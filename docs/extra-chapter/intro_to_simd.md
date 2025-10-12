@@ -84,7 +84,9 @@ With the function unrolled, lets try to look into the [Intel SIMD reference](htt
 I heavily recomend you look at the instructions i mention here in the documentation, as this documentation is the SIMD bible and will tell you what cpus support each instruction and how fast the instruction is.
 
 The one we actually want is `_mm_add_ps`. This takes 2 `__m128` values (referencing the 128 bit registers) and adds them together. 
-This isnt taking a float* or similar, so we need to first load our values into SIMD registers. There are many ways of doing it, but the one we want here is `_mm_load_ps`which takes a float* and loads it into a vector. In the same way, we want the store too as `_mm_store_ps`, to take our vector register with the math operation, and save it on the memory.
+This isnt taking a float* or similar, so we need to first load our values into SIMD registers. There are many ways of doing it, but the one we want here is `_mm_loadu_ps`which takes a float* and loads it into a vector. In the same way, we want the store too as `_mm_store_ps`, to take our vector register with the math operation, and save it on the memory.
+
+There are 2 versions of load, one of them is `_mm_load_ps` and other is `_mm_loadu_ps`. The first one has a flag that tells the CPU that the load is aligned, while the other one doesnt. Specially in older cpus, the aligned load will be faster, so if you know that the data will be aligned to 128 bits, you want to use the aligned version of the load. On most modern cpus there isnt a difference, so unless you know your data is aligned its better to use loadu. As this function takes arbitary float array, we dont have the guarantee for alignment.
 
 Using them, we have our vector addition, and it looks like this.
 
@@ -97,8 +99,8 @@ Using them, we have our vector addition, and it looks like this.
 void add_arrays_sse(float* A, float* B, size_t count){
     size_t i = 0;
     for(i; i < count; i+= 4){
-        __m128 vA = _mm_load_ps(A + i);
-        __m128 vB = _mm_load_ps(B + i);
+        __m128 vA = _mm_loadu_ps(A + i);
+        __m128 vB = _mm_loadu_ps(B + i);
 
         _mm_store_ps(_mm_add_ps(vA,vB), A + i);
     }
@@ -110,7 +112,10 @@ void add_arrays_sse(float* A, float* B, size_t count){
 }
 ```
 
-We are using a bit of vector math to index the arrays for the `_mm_load_ps`, loading the data into the simd vectors, and then doing our math and storing it. This loop should be almost 4x faster than the scalar version.
+
+![map]({{site.baseurl}}/diagrams/simd/wide_add.svg)
+
+We are using a bit of vector math to index the arrays for the `_mm_loadu_ps`, loading the data into the simd vectors, and then doing our math and storing it. This loop should be almost 4x faster than the scalar version.
 
 But this is the SSE version, which is 4-wide. What if we want to do it as 8-wide using AVX? We go back to the intrinsic reference, and find the avx version of the same load, store, and add functions. This gives us `_mm256_load_ps`, `_mm256_store_ps`, and ` _mm256_add_ps`, same thing, but using `__mm256` vector variables instead of the `__mm128` ones, so 8 floats, not 4. Loop looks like this
 
@@ -123,8 +128,8 @@ But this is the SSE version, which is 4-wide. What if we want to do it as 8-wide
 void add_arrays_avx(float* A, float* B, size_t count){
     size_t i = 0;
     for(i; i < count; i+= 8){
-        __m256 vA = _mm256_load_ps(A + i);
-        __m256 vB = _mm256_load_ps(B + i);
+        __m256 vA = _mm256_loadu_ps(A + i);
+        __m256 vB = _mm256_loadu_ps(B + i);
 
         _mm256_store_ps(_mm256_add_ps(vA,vB), A + i);
     }
