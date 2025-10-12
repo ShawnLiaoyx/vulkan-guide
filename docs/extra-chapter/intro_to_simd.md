@@ -186,24 +186,36 @@ void matmul4x4(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
 }
 ```
 
+
+
+
 We have a set of nested for loops, so its not quite so clear how can we vectorize this. To vectorize it, we need to find a way of writing the logic so that we can write the data as direct rows of 4 float at a time (the `j` axis on the result). SIMD loads and stores are contiguous, so for our algorithms we always need to find a way to arrange the calculations to load contiguous values and store contiguous values. Its also important to remember that moving data into vector registers can be a bit slow, so we must find a way to load as much data into simd variables as possible, and do all the operations on them directly, then store the result out. If we are moving from scalar land into vector land constnatly we end up losing all the performance wins from vectors.
 
-We need to go at a bit higher level of abstraction to think about the algorithm properly, and think what operations are needed here for vectorization.
-In a matrix multiplication, for each of the elements in the matrix, we are doing a dot product of the row of one matrix and the column of another. One possible way of vectorizing a matrix mul could take advantage of it, loading one column from a matrix, a row from the other one, and calling `_mm_dp_ps` to do a dot product. This is not that recomended for a case like a matrixmul because SIMD operations that work across the lanes of the simd register end to be high in latency and slower than simd operations that are per-lane fully parallel. 
+This diagram shows what is going on in here. Visualizing and drawing the algorithm helps a lot when doing vectorization, to identify patterns on the data.
+![map]({{site.baseurl}}/diagrams/simd/vkguide_simd_mat4_base.svg)
 
-But we could try to do 4 dot products at once. Looking at the algorithm, we can grab a column from one matrix, then grab the 4 rows of the other one, and multiply everything together like that, doing 4 dot products at a time and then writing 4 values at a time to the result matrix.
+In a matrix multiplication, for each of the elements in the matrix, we are doing a dot product of the row of one matrix and the column of another. In this algorithm, we have a couple ways of parallelizing it.
 
-To load an entire matrix, we can do 4 load calls, one per row, and just store them as 4 variables. Or rows are stored contiguously, so its a good fit to do it this way.
+We could try to parallelize the dot product itself for each individual result element. this means we need to do 16 loops, and on each, load a column vector and a row vector, then do `_mm_dp_ps` to do the dot product itself. Due to the data patterns, this is not a good option. Too many instructions total and too much data shuffling due to the column vectors. If the matrix was transposed, this could be a better option. But its not.
+
+The other option would be to parallelize the dot product calculation, and do 4 dot products at once, for filling an entire row of the result.
+
+Looking at the matrix multiplication, we can see that for one row of the result, it will multiply the column of that value with the shared row of the other matrix. Visualizing it, it looks like this. Which is what we want to do to calculate this matrix multiplication.
+
+![map]({{site.baseurl}}/diagrams/simd/vkguide_simd_mat4_simd.svg)
+
+
+Lets implement that. First, we will load the entire first matrix to variables, as its going to be shared for all the calculations.
 
 ```cpp
     //load the entire m1 matrix to simd registers
-    __m128  vx = _mm_load_ps(&m1[0][0]);
-    __m128  vy = _mm_load_ps(&m1[1][0]);
-    __m128  vz = _mm_load_ps(&m1[2][0]);
-    __m128  vw = _mm_load_ps(&m1[3][0]);
+    __m128  a = _mm_load_ps(&m1[0][0]);
+    __m128  b = _mm_load_ps(&m1[1][0]);
+    __m128  c = _mm_load_ps(&m1[2][0]);
+    __m128  d = _mm_load_ps(&m1[3][0]);
 ```
 
-The other piece we need is to load a single column into 4 simd registers, with the numbers duplicated. We can do multiple scalar loads, but thats actually a bit slower than loading once and then rearranging the memory a bit with shuffles.
+SSE does not have scalar by vector multiplication, so if we want to multiply a vector by a single number, we will need to convert that single number into a vector, with the value duplicated. To do that, we are going to load the row in one simd load, and then use shuffling to write 4 vectors for the x,y,z,w values duplicated.
 
 ```cpp
 __m128 col = _mm_load_ps(&m2[i][0]);
@@ -214,15 +226,15 @@ __m128 z = _mm_shuffle_ps(col,col, _MM_SHUFFLE(2, 2, 2, 2));
 __m128 w = _mm_shuffle_ps(col,col, _MM_SHUFFLE(3, 3, 3, 3));
 ```
 
-The shuffle instruction lets us move around the values of a simd register. This snippet loads the column once, and then converts it into 4 simd registers, with the first being "x,x,x,x", second being "y,y,y,y" and so on. This is a very common technique, and if you target avx you can do it with the `_mm_permute_ps` which works similar.
+The shuffle instruction lets us move around the values of a simd register. This snippet loads the row once, and then converts it into 4 simd registers, with the first being "x,x,x,x", second being "y,y,y,y" and so on. This is a very common technique, and if you target avx you can do it with the `_mm_permute_ps` which works similar. In AVX, its also possible to directly load 1 float into a wide register with the `_mm_broadcast_ss` intrinsic. 
 
 The last part of the algorithm is to perform the actual dot product calculation, 4 of them at once, and store the result
 
 ```cpp
- __m128 result_col = _mm_mul_ps(vx, x);
-        result_col = _mm_add_ps(result_col, _mm_mul_ps(vy, y));
-        result_col = _mm_add_ps(result_col, _mm_mul_ps(vz, z));
-        result_col = _mm_add_ps(result_col, _mm_mul_ps(vw, w));
+ __m128 result_col = _mm_mul_ps(a, x);
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(b, y));
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(c, z));
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(d, w));
 
         _mm_store_ps(&out[i][0], result_col);
 ```
@@ -231,10 +243,10 @@ The full algorithm looks like this.
 ```cpp
 void matmul4x4(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
     //load the entire m1 matrix to simd registers
-    __m128  vx = _mm_load_ps(&m1[0][0]);
-    __m128  vy = _mm_load_ps(&m1[1][0]);
-    __m128  vz = _mm_load_ps(&m1[2][0]);
-    __m128  vw = _mm_load_ps(&m1[3][0]);
+    __m128  a = _mm_load_ps(&m1[0][0]);
+    __m128  b = _mm_load_ps(&m1[1][0]);
+    __m128  c = _mm_load_ps(&m1[2][0]);
+    __m128  d = _mm_load_ps(&m1[3][0]);
 
      for (int i = 0; i < 4; i++) {
         //load a row and widen it
@@ -246,10 +258,10 @@ void matmul4x4(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
         __m128 w = _mm_shuffle_ps(col,col, _MM_SHUFFLE(3, 3, 3, 3));
 
         //dot products
-        __m128 result_col = _mm_mul_ps(vx, x);
-        result_col = _mm_add_ps(result_col, _mm_mul_ps(vy, y));
-        result_col = _mm_add_ps(result_col, _mm_mul_ps(vz, z));
-        result_col = _mm_add_ps(result_col, _mm_mul_ps(vw, w));
+        __m128 result_col = _mm_mul_ps(a, x);
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(b, y));
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(c, z));
+        result_col = _mm_add_ps(result_col, _mm_mul_ps(d, w));
 
         _mm_store_ps(&out[i][0], result_col);
     }
