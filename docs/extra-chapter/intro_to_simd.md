@@ -54,6 +54,8 @@ void add_arrays(float* A, float* B, size_t count){
 }
 ```
 
+![map]({{site.baseurl}}/diagrams/simd/scalar_add.svg)
+
 This is a very simple function where we have 2 arrays of floats and we add the second one to the first. We will be using SSE4 for this, which does operations 4 numbers at a time, so to think of it, lets unroll this code in sets of 4
 ```cpp
 
