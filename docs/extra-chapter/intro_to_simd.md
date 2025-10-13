@@ -544,13 +544,14 @@ uint8_t isOnOrForwardPlane_fma(const Plane& plane) const
 
     __m256 px = _mm256_broadcast_ss(&plane.normal.x);
     __m256 py = _mm256_broadcast_ss(&plane.normal.y);
-    __m256 pz = _mm256_broadcast_ss(&plane.normal.z);    
+    __m256 pz = _mm256_broadcast_ss(&plane.normal.z);
     __m256 pdist = _mm256_broadcast_ss(&plane.distance);
 
-
+    // (center.x * plane.normal.x) + (center.y * plane.normal.y)
     __m256 dot_a = _mm256_fmadd_ps(cx, px,
                     _mm256_mul_ps(cy, py));
 
+     // (center.z * plane.normal.z) - plane.distance
     __m256 dot_b = _mm256_fmsub_ps(cz,pz, pdist);
 
     __m256 dot_distance = _mm256_add_ps(dot_a,dot_b);
@@ -562,3 +563,5 @@ uint8_t isOnOrForwardPlane_fma(const Plane& plane) const
 ```
 
 FMA can often be hard to deal with as you are doing multiple operations in 1 function call, which complicates the code. Always benchmark it to see if you get a win. On my testing of this frustum cull function, it can improve the performance up to 40% vs normal avx version, so the win is often very worth it. FMA is not something the compiler will optimize your intrinsics into, as FMA has different floating point properties (its higher precision!) and rounding vs multiply and add as normal.
+
+{% include comments.html term="Intro To SIMD Comments" %}
