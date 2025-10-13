@@ -540,17 +540,22 @@ uint8_t isOnOrForwardPlane_fma(const Plane& plane) const
     __m256 cx = _mm256_load_ps(center_x);
     __m256 cy = _mm256_load_ps(center_y);
     __m256 cz = _mm256_load_ps(center_z);
+    __m256 radius = _mm256_load_ps(center_z);
 
-    __m256 dot_distance = _mm256_sub_ps(
-        _mm256_fmadd_ps(cx, _mm256_broadcast_ss(&plane.normal.x), 
-            _mm256_fmadd_ps(cy, _mm256_broadcast_ss(&plane.normal.y), 
-                _mm256_mul_ps(cz, _mm256_broadcast_ss(&plane.normal.z))
-            )
-        )
-        
-        , _mm256_broadcast_ss(&plane.distance));
+    __m256 px = _mm256_broadcast_ss(&plane.normal.x);
+    __m256 py = _mm256_broadcast_ss(&plane.normal.y);
+    __m256 pz = _mm256_broadcast_ss(&plane.normal.z);    
+    __m256 pdist = _mm256_broadcast_ss(&plane.distance);
 
-    __m256 comp = _mm256_cmp_ps(dot_distance, _mm256_sub_ps(_mm256_setzero_ps(), _mm256_load_ps(radius)), _CMP_GT_OQ);
+
+    __m256 dot_a = _mm256_fmadd_ps(cx, px,
+                    _mm256_mul_ps(cy, py));
+
+    __m256 dot_b = _mm256_fmsub_ps(cz,pz, pdist);
+
+    __m256 dot_distance = _mm256_add_ps(dot_a,dot_b);
+
+    __m256 comp = _mm256_cmp_ps(dot_distance, _mm256_sub_ps(_mm256_setzero_ps(), radius), _CMP_GT_OQ);
 
     return _mm256_movemask_ps(comp);
 }
