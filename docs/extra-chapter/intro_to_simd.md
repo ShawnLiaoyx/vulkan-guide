@@ -1,6 +1,6 @@
 ---
 layout: default
-title: (WIP) Intro to practical SIMD for graphics
+title: Intro to practical SIMD for graphics
 parent: Extra Chapter
 nav_order: 45
 ---
