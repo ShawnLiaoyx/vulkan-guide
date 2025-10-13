@@ -10,7 +10,7 @@ As CPUs hit the ghz barrier, development tried to move them to higher degrees of
 
 SIMD programming, or vector programming, is the same as normal programming, but instead of dealing with values one by one, you deal with them in groups, using much larger CPU registers. The size of those registers can vary, and it limits how many numbers (or data) you can pack for a single instruction to process.
 
-Over the years, many SIMD instruction sets have been released as CPUs evolved. Each of them is different, which is one of the biggest problems on SIMD programming, as you can easily write code that works on one CPU, but doesnt in other because the instruction set supported is different. On x86, used in the big consoles (except switch) and PCs, we have SSE, AVX, and AVX512. On ARM (phones, nintendo switch) we have NEON and SVE, and on RiscV cpus we see RVV. Each of those have their own gotchas and properties, so generally an algorithm will have to be written for the sets that are supported on whatever cpus you are targetting. 
+Over the years, many SIMD instruction sets have been released as CPUs evolved. Each of them is different, which is one of the biggest problems on SIMD programming, as you can easily write code that works on one CPU, but doesn't in other because the instruction set supported is different. On x86, used in the big consoles (except switch) and PCs, we have SSE, AVX, and AVX512. On ARM (phones, nintendo switch) we have NEON and SVE, and on RiscV cpus we see RVV. Each of those have their own gotchas and properties, so generally an algorithm will have to be written for the sets that are supported on whatever cpus you are targetting. 
 
 ## X86 (PC) SIMD sets
 - SSE4 : According to Steam Hardware survey, supported on 99.78% of PCs. Good as a baseline. This set is 128 bits per register, which means its 4-wide on floating point operations. 
@@ -62,7 +62,7 @@ This is a very simple function where we have 2 arrays of floats and we add the s
 //Adds B to A. The arrays must have the same size
 void add_arrays_unroll4(float* A, float* B, size_t count){
     size_t i = 0;
-    for(i; i < count; i+= 4){
+    for(; i < count; i+= 4){
         A[i+0] += B[i+0]; 
         A[i+1] += B[i+1]; 
         A[i+2] += B[i+2]; 
@@ -70,14 +70,14 @@ void add_arrays_unroll4(float* A, float* B, size_t count){
     }
 
     //loop terminator. What if the loop isnt a multiple of 4?
-    for(i; i < count; i++){
+    for(; i < count; i++){
         A[i] += B[i]; 
     }
 }
 
 ```
 
-We immediately run into a problem here. If we are doing operations in groups of 4, how do we deal with a non-4 divisible workload? We have to add a scalar (non-vector) path at the end to do the stragglers. This happens the same with any simd code, and a common way of dealing with it is padding the workload to a multiple or 4 or 8. 
+We immediately run into a problem here. If we are doing operations in groups of 4, how do we deal with a non-4 divisible workload? We have to add a scalar (non-vector) path at the end to do the stragglers. This happens the same with any simd code, and a common way of dealing with it is padding the workload to a multiple of 4 or 8. 
 
 With the function unrolled, lets try to look into the [Intel SIMD reference](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#techs=SSE_ALL) document, to try to find what we could be using here.  As our goal is to target SSE for this, we tick the "SSE Family" checkbox at the left. Now we can search for `add` and see there are a lot of possible operations. 
 
@@ -98,7 +98,7 @@ Using them, we have our vector addition, and it looks like this.
 //Adds B to A. The arrays must have the same size
 void add_arrays_sse(float* A, float* B, size_t count){
     size_t i = 0;
-    for(i; i < count; i+= 4){
+    for(; i < count; i+= 4){
         __m128 vA = _mm_loadu_ps(A + i);
         __m128 vB = _mm_loadu_ps(B + i);
 
@@ -106,7 +106,7 @@ void add_arrays_sse(float* A, float* B, size_t count){
     }
 
     //loop terminator. What if the loop isnt a multiple of 4?
-    for(i; i < count; i++){
+    for(; i < count; i++){
         A[i] += B[i]; 
     }
 }
@@ -127,7 +127,7 @@ But this is the SSE version, which is 4-wide. What if we want to do it as 8-wide
 //Adds B to A. The arrays must have the same size
 void add_arrays_avx(float* A, float* B, size_t count){
     size_t i = 0;
-    for(i; i < count; i+= 8){
+    for(; i < count; i+= 8){
         __m256 vA = _mm256_loadu_ps(A + i);
         __m256 vB = _mm256_loadu_ps(B + i);
 
@@ -135,7 +135,7 @@ void add_arrays_avx(float* A, float* B, size_t count){
     }
 
     //loop terminator. What if the loop isnt a multiple of 8?
-    for(i; i < count; i++){
+    for(; i < count; i++){
         A[i] += B[i]; 
     }
 }
@@ -151,15 +151,15 @@ If you want to see how NEON would work, you look at the ARM reference instead of
 //Adds B to A. The arrays must have the same size
 void add_arrays_neon(float* A, float* B, size_t count){
     size_t i = 0;
-    for(i; i < count; i+= 4){
-        float32x4_t  vA = vld1_f32(A + i);
-        float32x4_t  vB = vld1_f32(B + i);
+    for(; i < count; i+= 4){
+        float32x4_t  vA = vld1q_f32(A + i);
+        float32x4_t  vB = vld1q_f32(B + i);
 
-        vst1_f32(vadd_f32(vA,vB), A + i);
+        vst1q_f32(A + i, vaddq_f32(vA,vB));
     }
 
     //loop terminator. What if the loop isnt a multiple of 4?
-    for(i; i < count; i++){
+    for(; i < count; i++){
         A[i] += B[i]; 
     }
 }
@@ -350,7 +350,7 @@ struct Sphere{
 
     bool isOnOrForwardPlane(const Plane& plane) const
     {
-        return (glm::dot(plane.normal, center) - distance) + radius > 0;
+        return (glm::dot(plane.normal, center) - plane.distance) + radius > 0;
     }
 }
 
@@ -483,8 +483,8 @@ uint8_t isOnFrustum(const Frustum& camFrustum, const SpherePack& spheres)
     for(int i = 0 ; i < 6; i++ )
     {
         visibility &= spheres.isOnOrForwardPlane(camFrustum.faces[i]);
-        
-        if(visility == 0)
+
+        if(visibility == 0)
         {
             return visibility; //stop here
         } 
@@ -494,7 +494,7 @@ uint8_t isOnFrustum(const Frustum& camFrustum, const SpherePack& spheres)
 }
 ```
 
-This demonstrates culling operations wide, 8 items at a time. You can also try to change the algorithm to swap the axis of vectorization, by culling the 6 planes at a time vs one sphere. you can do that as 4-wide planes first, then 2 scalar ones. Or pad the planes to 8. Thats left as an excersise, try to do it on your own. The math and dot products are basically the same as with this version. 
+This demonstrates culling operations wide, 8 items at a time. You can also try to change the algorithm to swap the axis of vectorization, by culling the 6 planes at a time vs one sphere. you can do that as 4-wide planes first, then 2 scalar ones. Or pad the planes to 8. Thats left as an exercise, try to do it on your own. The math and dot products are basically the same as with this version. 
 
 # FMA (Floating Multiply-Add)
 
@@ -522,10 +522,10 @@ void matmul4x4_avx_fma(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
         __m128 w = _mm_broadcast_ss(&m2[i][3]);
 
         //dot products
-        __m128 resA = _mm_fmadd_ps(x, a, _mm_mul_ps(y, b));
-        __m128 resB = _mm_fmadd_ps(z, c, _mm_mul_ps(w, d));
+        __m128 resA = _mm_fmadd_ps(x, vx, _mm_mul_ps(y, vy));
+        __m128 resB = _mm_fmadd_ps(z, vz, _mm_mul_ps(w, vw));
 
-        _mm_store_ps(&out[i][0], _mm_add_ps(resA, resB));
+        _mm_store_ps(&out[i][0],  _mm_add_ps(resA, resB));
     }
 }
 ```
@@ -540,7 +540,7 @@ uint8_t isOnOrForwardPlane_fma(const Plane& plane) const
     __m256 cx = _mm256_load_ps(center_x);
     __m256 cy = _mm256_load_ps(center_y);
     __m256 cz = _mm256_load_ps(center_z);
-    __m256 radius = _mm256_load_ps(center_z);
+    __m256 vradius = _mm256_load_ps(radius);
 
     __m256 px = _mm256_broadcast_ss(&plane.normal.x);
     __m256 py = _mm256_broadcast_ss(&plane.normal.y);
@@ -556,7 +556,7 @@ uint8_t isOnOrForwardPlane_fma(const Plane& plane) const
 
     __m256 dot_distance = _mm256_add_ps(dot_a,dot_b);
 
-    __m256 comp = _mm256_cmp_ps(dot_distance, _mm256_sub_ps(_mm256_setzero_ps(), radius), _CMP_GT_OQ);
+    __m256 comp = _mm256_cmp_ps(dot_distance, _mm256_sub_ps(_mm256_setzero_ps(), vradius), _CMP_GT_OQ);
 
     return _mm256_movemask_ps(comp);
 }
