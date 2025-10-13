@@ -323,4 +323,237 @@ void matmul4x4_avx(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
 }
 ```
 
-While AVX is about 8-wide SIMD, it brings new things to 4-wide vectors too, and one of the new things you get vs SSE is the ability to load 1 value directly into a  vector through the `_mm_broadcast_ss` instruction. It can be both a 4 wide or a 8 wide vector. So the compiler has found that we are doing a code pattern typical of SSE code to load 1 value to a whole vector, and replaced our intrinsics with the faster version. Its important to remember that the compiler will optimize around our intrinsics, it will not do 1 to 1 transformation of the intrinsics code into assembly, if we want that sort of reliability, there is no option but to directly use assembly code. 
+While AVX is about 8-wide SIMD, it brings new things to 4-wide vectors too, and one of the new things you get vs SSE is the ability to load 1 value directly into a  vector through the `_mm_broadcast_ss` instruction. So the compiler has found that we are doing a code pattern typical of SSE code to load 1 value to a whole vector, and replaced our intrinsics with the faster version. Its important to remember that the compiler will optimize around our intrinsics, it will not do 1 to 1 transformation of the intrinsics code into assembly, if we want that sort of reliability, there is no option but to directly use assembly code. 
+
+
+# Frustum culling
+Lets look into another algorithm commonly seen in graphics engines. Frustum culling. We will be basing it on the one in [Learn OpenGL](https://learnopengl.com/Guest-Articles/2021/Scene/Frustum-Culling), but converting it to SIMD. You can read the article to understand what exact math operations we are dealing with.
+
+For the frustum culling algorithm, we need to test 6 planes against a sphere per-object. We have 2 main possibilities here. We could SIMD it in a horizontal fashion, culling the set of 6 planes against 8 objects at a time. We could also do it vertically, and do one object at a time, but calculating the 6 planes at once. Sadly its 6 planes which means we have a leftover if we do 4-wide, or its too small if we do 8-wide. For this algorithm, people have done both versions depending on the game engine and CPU. We are going to make it work. We are going to parallelize across the objects, culling 8 of them at a time, to demonstrate a few more advanced techniques.
+
+Lets look at what exact code we are dealing with, in the scalar version. Ive adapted the code from the learnopengl article a bit to shorten it.
+
+```cpp
+struct Plane{
+    glm::vec3 normal;
+    float distance;
+};
+
+struct Frustum
+{
+    Plane faces[6];
+};
+
+struct Sphere{
+    glm::vec3 center;
+    float radius;
+
+    bool isOnOrForwardPlane(const Plane& plane) const
+    {
+        return (glm::dot(plane.normal, center) - distance) + radius > 0;
+    }
+}
+
+bool isOnFrustum(const Frustum& camFrustum, const Sphere& sphere)
+{
+    
+    for(int i = 0 ; i < 6; i++ )
+    {
+        if(!sphere.isOnOrForwardPlane(camFrustum.faces[i]))
+        {
+            return false;
+        } 
+    }
+
+    return true;
+}
+```
+
+We are skipping the sphere transformation code in the learnopengl culling function as we will be assuming the spheres are already on their correct world transform to begin with, which skips a bunch of logic and lets us focus more on the core culling.
+
+Looking at our data. We have Plane as essentially a vec4, and so is the sphere. A frustum is 6 planes, and we need to do dot product + a comparaison to see on which side of the plane we are with the sphere. Then if the sphere is on the wrong side of any of the 6 planes, we return false on the cull function. 
+
+Above, i mentioned that we are going to be parallelizing across multiple spheres at once. We see a problem here, which is how to deal with the branch. After all, we could have a case where one of the spheres is culled in the first iteration of the loop, while the others will be visible and thus go through the 6 iterations. 
+
+To start with, we are going full branchless, and we will just not branch, instead we will keep the cull result in a vector and always loop 6 times.
+
+We have another problem too. We dont have a clear axis to pack data for the vectors. Unlike with the matrix, we cant just take a row as a vector. For that, we are going to modify the algo to a Structure of Arrays layout. Instead of having each sphere as 1 struct, we will use 1 struct to hold 8 spheres. This way we have our clear vectors for all the logic. 
+
+```cpp
+//group 8 spheres in SoA layout, aligned as 32 bytes so that its well aligned to AVX 
+struct alignas(32) SpherePack{
+
+    float center_x[8];
+    float center_y[8];
+    float center_z[8];
+    float radius[8];
+}
+```
+
+If we want to do SIMD frustum culling, we can no longer just put the sphere in a render-mesh struct or similar. For this we need to look into data oriented techniques, and we will need to store the cull spheres in a separate array, using packing like this. For example, it could look like this
+```cpp
+
+struct CullGroup{
+
+    std::vector<SpherePack> CullSpheres;
+    std::vector<RenderMesh*> Renderables;
+}
+```
+
+We can then index a specific renderable by dividing the index by 8 and accessing the sphere pack. This sort of memory layout is normally called AoSoA "Array of Structure of Arrays" and it tends to be highly effective. It would be fine too to store the 4 params from the sphere as full lenght vectors, this is more for illustrational reasons.
+
+We will be creating a new cull function, where we send it the float* pointers of the spheres, and we cull 8 at a time, returning a single u8 bitfield. In that bitfield, a set bit means true, and unset false. We are packing 8 bools into that number.
+
+```cpp
+
+uint8_t isOnFrustum(const Frustum& camFrustum, const SpherePack& spheres)
+{
+    uint8_t visibility = 0xFF; //begin with it set to true.
+    for(int i = 0 ; i < 6; i++ )
+    {
+        visibility &= spheres.isOnOrForwardPlane(camFrustum.faces[i]);
+    }
+
+    return visibility;
+}
+```
+
+We will be adding a function to the 8pack of spheres that will compare the spheres with a single plane. This is what we will be writing intrinsics into. In here we could have a SSE version that culls 4 spheres 2 times, but we will continue with the 8-wide AVX.
+
+Lets first unwrap the operations in the scalar cull so we can more clearly see the exact math we need.
+
+```cpp
+bool isOnOrForwardPlane(const Plane& plane) const
+{
+    float dx = center.x * plane.normal.x;
+    float dy = center.y * plane.normal.y;
+    float dz = center.z * plane.normal.z;
+
+    float dot_distance = dx + dy + dz - plane.distance;
+
+    return dot_distance > -radius;
+}
+
+```
+
+And now we can convert it to the relevant intrinsics.
+
+```cpp
+struct alignas(32) SpherePack{
+
+    float center_x[8];
+    float center_y[8];
+    float center_z[8];
+    float radius[8];
+
+    uint8_t isOnOrForwardPlane(const Plane& plane) const
+    {
+        __m256 cx = _mm256_load_ps(center_x);
+        __m256 cy = _mm256_load_ps(center_y);
+        __m256 cz = _mm256_load_ps(center_z);
+
+
+        __m256 dx = _mm256_mul_ps(cx, _mm256_broadcast_ss(&plane.normal.x));
+        __m256 dy = _mm256_mul_ps(cy, _mm256_broadcast_ss(&plane.normal.y));
+        __m256 dz = _mm256_mul_ps(cz, _mm256_broadcast_ss(&plane.normal.z));
+
+        __m256 dot_distance = _mm256_sub_ps( _mm256_add_ps(dx, _mm256_add_ps(dy,dz)) , _mm256_broadcast_ss(&plane.distance)) ;
+
+        __m256 negrad = _mm256_sub_ps(_mm256_setzero_ps(), _mm256_load_ps(radius));
+        __m256 comp = _mm256_cmp_ps(dot_distance, negrad , _CMP_GT_OQ);
+
+        return _mm256_movemask_ps(comp);
+    }
+}
+```
+
+We begin by calculating the dot product and plane distance, and then we can compare it with the sphere radius negated. With AVX, you compare float values with the `_mm256_cmp_ps`. this will give you a special type of vector where its going to be a mask. Other AVX operations will take this mask, such as the `_mm256_movemask_ps` we use to convert it to a integer. 
+
+During our algorithm loop we will be repeating the same loads on the sphere on each of the 6 iterations of the loop. Lets hope the compiler can optimize that out as it would save perf.
+
+We now have our wide frustum cull function,which culls 8 spheres at a time. 
+
+There is still the issue of the branching in the loop, as looping 6 times can be unnecessary. We can add this branch to the loop to exit out of it. Under benchmark testing, this was a wash if it improved perf or not, as the branch is unpredictable and we are taking data "out" of the vector registers which has a bit of latency. The cull function itself is quite fast, so the latency of grabbing the mask and checking it in the branch can be larger than the cost of just doing the next loop of the cull. Unrolling this loop and interleaving operations would help, but it complicates the code a lot. This is a change of the algorithm that has to be benchmarked in the individual target CPUs to see if its a win or not.
+
+```cpp
+
+uint8_t isOnFrustum(const Frustum& camFrustum, const SpherePack& spheres)
+{
+    uint8_t visibility = 0xFF; //begin with it set to true.
+    for(int i = 0 ; i < 6; i++ )
+    {
+        visibility &= spheres.isOnOrForwardPlane(camFrustum.faces[i]);
+        
+        if(visility == 0)
+        {
+            return visibility; //stop here
+        } 
+    }
+
+    return visibility;
+}
+```
+
+This demonstrates culling operations wide, 8 items at a time. You can also try to change the algorithm to swap the axis of vectorization, by culling the 6 planes at a time vs one sphere. you can do that as 4-wide planes first, then 2 scalar ones. Or pad the planes to 8. Thats left as an excersise, try to do it on your own. The math and dot products are basically the same as with this version. 
+
+# FMA (Floating Multiply-Add)
+
+There is still one last thing to demonstrate here. As you have seen, dot products are a very common operation in graphics. Matrix mul uses them, and so does frustum culling. When doing dot products we are doing both multiplies and adds. 
+
+In some CPUs, there is support for the FMA extra instructions, which let you do multiply and add in one single operation. Not all CPUs support it, but when they do support it, its pretty much 2x faster, as you are doing 1 operation to do both add and multiply vs 2 operations, and if you look at the instruction performance tables, the cost of a multiply-add is the same as a single multiply, so its essentially free perf. The operation is `(a * b) + c`. It does the multiply first, and then adds. There are variants where it subtracts.
+
+Lets look at how can we use FMA to make things faster. Keep in mind only some cpus have them, like ryzens and some modern intel cpus, but the support is less widespread than AVX 2 by itself. As FMA is a separate feature flag, there are AVX1 only cpus that have FMA, while also AVX 2 cpus that dont. You must check before using it.
+
+For the matrix-multiply, if we move it to use FMA it looks like this. 
+
+```cpp
+void matmul4x4_avx_fma(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
+    //load the entire m1 matrix to simd registers
+    __m128  a = _mm_load_ps(&m1[0][0]);
+    __m128  b = _mm_load_ps(&m1[1][0]);
+    __m128  c = _mm_load_ps(&m1[2][0]);
+    __m128  d = _mm_load_ps(&m1[3][0]);
+
+     for (int i = 0; i < 4; i++) {
+
+        __m128 x = _mm_broadcast_ss(&m2[i][0]);
+        __m128 y = _mm_broadcast_ss(&m2[i][1]);
+        __m128 z = _mm_broadcast_ss(&m2[i][2]);
+        __m128 w = _mm_broadcast_ss(&m2[i][3]);
+
+        //dot products
+        __m128 resA = _mm_fmadd_ps(x, a, _mm_mul_ps(y, b));
+        __m128 resB = _mm_fmadd_ps(z, c, _mm_mul_ps(w, d));
+
+        _mm_store_ps(&out[i][0], _mm_add_ps(resA, resB));
+    }
+}
+```
+
+This version should give us extra performance. On my computer it shows 20% extra performance against the normal avx version, which is a very nice performance win.
+
+For the culling, the FMA version looks like this.
+
+```cpp
+uint8_t isOnOrForwardPlane_fma(const Plane& plane) const
+{
+    __m256 cx = _mm256_load_ps(center_x);
+    __m256 cy = _mm256_load_ps(center_y);
+    __m256 cz = _mm256_load_ps(center_z);
+
+    __m256 dot_distance = _mm256_sub_ps(
+        _mm256_fmadd_ps(cx, _mm256_broadcast_ss(&plane.normal.x), 
+            _mm256_fmadd_ps(cy, _mm256_broadcast_ss(&plane.normal.y), 
+                _mm256_mul_ps(cz, _mm256_broadcast_ss(&plane.normal.z))
+            )
+        )
+        
+        , _mm256_broadcast_ss(&plane.distance));
+
+    __m256 comp = _mm256_cmp_ps(dot_distance, _mm256_sub_ps(_mm256_setzero_ps(), _mm256_load_ps(radius)), _CMP_GT_OQ);
+
+    return _mm256_movemask_ps(comp);
+}
+```
+
+FMA can often be hard to deal with as you are doing multiple operations in 1 function call, which complicates the code. Always benchmark it to see if you get a win. On my testing of this frustum cull function, it can improve the performance up to 40% vs normal avx version, so the win is often very worth it. FMA is not something the compiler will optimize your intrinsics into, as FMA has different floating point properties (its higher precision!) and rounding vs multiply and add as normal.
