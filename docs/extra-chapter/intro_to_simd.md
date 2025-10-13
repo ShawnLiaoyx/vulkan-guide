@@ -15,7 +15,7 @@ Over the years, many SIMD instruction sets have been released as CPUs evolved. E
 ## X86 (PC) SIMD sets
 - SSE4 : According to Steam Hardware survey, supported on 99.78% of PCs. Good as a baseline. This set is 128 bits per register, which means it's 4-wide for floating-point operations. 
 - AVX : Essentially a wider version of SSE, it moves into 256 bits per register, for 8-wide floating point operations. AVX1 is supported by 97.24% of gaming PCs, and AVX2 is supported by 95.03% of PCs. AVX2 mostly adds a few instructions for shuffling data around, and 8-wide integer operations. Because AVX was designed to run on SSE4-compatible CPU math units, a lot of the operations have a weird "half and half" execution, where it applies separately to the first 4 numbers and the next 4 numbers. This will be something to take into mind when programming it. Some AVX CPUs have support for the optional "FMA" extension, which adds the possibility of multiplying and adding values as 1 operation, which can 2x the speed of many common graphics operations. 
-- AVX512 : While it keeps the AVX name, it's a complete rewrite from the AVX1-2 instruction set, with fully different instructions. This is currently the most advanced shipped instruction set, with 512-wide registers that fit 16 floats at a time, but also an extensive set of masking systems and handy instructions that make writing advanced algorithms much, much easier than in AVX2. Sadly, it's at sub-20% support on gaming PCs, thanks to Intel dropping it from many consumer CPUs. Not relevant for games due to low support.
+- AVX512 : While it keeps the AVX name, it's a complete rewrite from the AVX1-2 instruction set, with fully different instructions. This is currently the most advanced shipped instruction set, with 512-bit registers that fit 16 floats at a time, but also an extensive set of masking systems and handy instructions that make writing advanced algorithms much, much easier than in AVX2. Sadly, it's at sub-20% support on gaming PCs, thanks to Intel dropping it from many consumer CPUs. Not relevant for games due to low support.
 
 ## ARM SIMD sets
 - NEON : Seen on pretty much every single phone CPU and the Nintendo Switch 1 and 2, this is a 128-bit instruction set, for 4-wide float operations. It's pretty much a direct improvement over SSE4, but doing similar things. Must-have for game devs that target mobile hardware.
@@ -46,10 +46,10 @@ So what's the simplest thing to use SIMD for? Every tutorial always starts with 
 
 ```cpp
 
-//Adds B to A. The arrays must have the same size
+// Adds B to A. The arrays must have the same size
 void add_arrays(float* A, float* B, size_t count){
     for(size_t i = 0; i < count; i++){
-        A[i] += B[i]; 
+        A[i] += B[i];
     }
 }
 ```
@@ -178,6 +178,7 @@ void matmul4x4(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
 
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++) {
+            out[i][j] = 0; // clear the matrix
             for (int k = 0; k < 4; k++) {
                 out[i][j] += m1[k][j] * m2[i][k];
             }
@@ -186,7 +187,6 @@ void matmul4x4(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
 }
 ```
 
-
 We have a set of nested for loops, so it's not quite so clear how can we vectorize this. To vectorize it, we need to find a way of writing the logic so that we can write the data as direct rows of 4 floats at a time (the `j` axis on the result). SIMD loads and stores are contiguous, so for our algorithms we always need to find a way to arrange the calculations to load contiguous values and store contiguous values. It's also important to remember that moving data into vector registers can be a bit slow, so we must find a way to load as much data into SIMD variables as possible, and do all the operations on them directly, then store the result out. If we are moving from scalar land into vector land constantly we end up losing all the performance wins from vectors.
 
 This diagram shows what is going on in here. Visualizing and drawing the algorithm helps a lot when doing vectorization, to identify patterns on the data.
@@ -194,7 +194,7 @@ This diagram shows what is going on in here. Visualizing and drawing the algorit
 
 In a matrix multiplication, for each of the elements in the matrix, we are doing a dot product of the row of one matrix and the column of another. In this algorithm, we have a couple ways of parallelizing it.
 
-We could try to parallelize the dot product itself for each individual result element. This means we need to do 16 loops, and on each, load a column vector and a row vector, then do `_mm_dp_ps` to do the dot product itself. Due to the data patterns, this is not a good option. Too many instructions total and too much data shuffling due to the column vectors. If the matrix was transposed, this could be a better option. But it's not.
+We could try to parallelize the dot product itself for each individual result element. This means we need to do 16 loops, and on each, load a column vector and a row vector, then do `_mm_dp_ps` to do the dot product itself. Due to the data patterns, this is not a good option. Too many instructions total and too much data shuffling due to the column vectors. If the second matrix was transposed, this could be a better option.
 
 The other option would be to parallelize the dot product calculation, and do 4 dot products at once, for filling an entire row of the result.
 
@@ -329,7 +329,7 @@ While AVX is about 8-wide SIMD, it brings new things to 4-wide vectors too, and 
 # Frustum culling
 Let's look into another algorithm commonly seen in graphics engines: frustum culling. We will be basing it on the one in [Learn OpenGL](https://learnopengl.com/Guest-Articles/2021/Scene/Frustum-Culling), but converting it to SIMD. You can read the article to understand what exact math operations we are dealing with.
 
-For the frustum culling algorithm, we need to test 6 planes against a sphere per object. We have 2 main possibilities here. We could SIMD it in a horizontal fashion, culling the set of 6 planes against 8 objects at a time. We could also do it vertically, and do one object at a time, but calculating the 6 planes at once. Sadly it's 6 planes which means we have a leftover if we do 4-wide, or it's too small if we do 8-wide. For this algorithm, people have done both versions depending on the game engine and CPU. We are going to implement the horizontal approach, parallelizing across the objects and culling 8 of them at a time, to demonstrate a few more advanced techniques.
+For the frustum culling algorithm, we need to test 6 planes against a sphere per object. We have 2 main possibilities here. We could SIMD it in a horizontal fashion, culling the set of 6 planes against 8 objects at a time. We could also do it vertically, and do one object at a time, but calculating the 6 planes at once. Unfortunately, having 6 planes means we have a leftover if we do 4-wide, and it's too small for 8-wide. For this algorithm, people have done both versions depending on the game engine and CPU. We are going to implement the horizontal approach, parallelizing across the objects and culling 8 of them at a time, to demonstrate a few more advanced techniques.
 
 Let's look at what exact code we are dealing with, in the scalar version. I've adapted the code from the Learn OpenGL article a bit to shorten it.
 
@@ -467,7 +467,7 @@ struct alignas(32) SpherePack{
 }
 ```
 
-We begin by calculating the dot product and plane distance, and then we can compare it with the sphere radius negated. With AVX, you compare float values with the `_mm256_cmp_ps`. This will give you a special type of vector where it's going to be a mask. Other AVX operations will take this mask, such as the `_mm256_movemask_ps` we use to convert it to an integer. 
+We begin by calculating the dot product and plane distance, and then we can compare it with the sphere radius negated. With AVX, you compare float values with the `_mm256_cmp_ps`, the `_CMP_GT_OQ` flag means its going to do a Greater-Than comparison. This will give you a special type of vector where it's going to be a mask. Other AVX operations will take this mask, such as the `_mm256_movemask_ps` we use to convert it to an integer. 
 
 During our algorithm loop we will be repeating the same loads on the sphere on each of the 6 iterations of the loop. Let's hope the compiler can optimize that out as it would save perf.
 
