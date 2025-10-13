@@ -83,10 +83,10 @@ With the function unrolled, lets try to look into the [Intel SIMD reference](htt
 
 I heavily recomend you look at the instructions i mention here in the documentation, as this documentation is the SIMD bible and will tell you what cpus support each instruction and how fast the instruction is.
 
-The one we actually want is `_mm_add_ps`. This takes 2 `__m128` values (referencing the 128 bit registers) and adds them together. 
-This isnt taking a float* or similar, so we need to first load our values into SIMD registers. There are many ways of doing it, but the one we want here is `_mm_loadu_ps`which takes a float* and loads it into a vector. In the same way, we want the store too as `_mm_store_ps`, to take our vector register with the math operation, and save it on the memory.
+The one we actually want is `_mm_add_ps`. This takes 2 `__m128` values (referencing the 128 bit registers) and adds them together.
+This isnt taking a float* or similar, so we need to first load our values into SIMD registers. There are many ways of doing it, but the one we want here is `_mm_loadu_ps`which takes a float* and loads it into a vector. In the same way, we want the store too as `_mm_storeu_ps`, to take our vector register with the math operation, and save it back to memory.
 
-There are 2 versions of load, one of them is `_mm_load_ps` and other is `_mm_loadu_ps`. The first one has a flag that tells the CPU that the load is aligned, while the other one doesnt. Specially in older cpus, the aligned load will be faster, so if you know that the data will be aligned to 128 bits, you want to use the aligned version of the load. On most modern cpus there isnt a difference, so unless you know your data is aligned its better to use loadu. As this function takes arbitary float array, we dont have the guarantee for alignment.
+There are 2 versions of load and store. For loads: `_mm_load_ps` (aligned) and `_mm_loadu_ps` (unaligned). For stores: `_mm_store_ps` (aligned) and `_mm_storeu_ps` (unaligned). The aligned versions require the data to be aligned to 16-byte boundaries. Specially in older cpus, the aligned versions will be faster, so if you know that the data will be aligned to 128 bits, you want to use the aligned versions. On most modern cpus there isnt a difference, so unless you know your data is aligned its better to use the unaligned versions. As this function takes arbitary float array, we dont have the guarantee for alignment.
 
 Using them, we have our vector addition, and it looks like this.
 
@@ -102,7 +102,7 @@ void add_arrays_sse(float* A, float* B, size_t count){
         __m128 vA = _mm_loadu_ps(A + i);
         __m128 vB = _mm_loadu_ps(B + i);
 
-        _mm_store_ps( A + i,_mm_add_ps(vA,vB));
+        _mm_storeu_ps(A + i, _mm_add_ps(vA,vB));
     }
 
     //loop terminator. What if the loop isnt a multiple of 4?
@@ -131,7 +131,7 @@ void add_arrays_avx(float* A, float* B, size_t count){
         __m256 vA = _mm256_loadu_ps(A + i);
         __m256 vB = _mm256_loadu_ps(B + i);
 
-        _mm256_store_ps(A + i,_mm256_add_ps(vA,vB));
+        _mm256_storeu_ps(A + i, _mm256_add_ps(vA,vB));
     }
 
     //loop terminator. What if the loop isnt a multiple of 8?
@@ -213,7 +213,7 @@ Lets implement that. First, we will load the entire first matrix to variables, a
     __m128  d = _mm_load_ps(&m1[3][0]);
 ```
 
-SSE does not have scalar by vector multiplication, so if we want to multiply a vector by a single number, we will need to convert that single number into a vector, with the value duplicated. To do that, we are going to load the row in one simd load, and then use shuffling to write 4 vectors for the x,y,z,w values duplicated.
+SSE does not have scalar by vector multiplication, so if we want to multiply a vector by a single number, we will need to convert that single number into a vector, with the value duplicated. To do that, we are going to load one row from m2 in a single simd load, and then use shuffling to create 4 vectors with the x,y,z,w values each duplicated across all lanes.
 
 ```cpp
 __m128 col = _mm_load_ps(&m2[i][0]);
@@ -522,8 +522,8 @@ void matmul4x4_avx_fma(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
         __m128 w = _mm_broadcast_ss(&m2[i][3]);
 
         //dot products
-        __m128 resA = _mm_fmadd_ps(x, vx, _mm_mul_ps(y, vy));
-        __m128 resB = _mm_fmadd_ps(z, vz, _mm_mul_ps(w, vw));
+        __m128 resA = _mm_fmadd_ps(x, a, _mm_mul_ps(y, b));
+        __m128 resB = _mm_fmadd_ps(z, c, _mm_mul_ps(w, d));
 
         _mm_store_ps(&out[i][0],  _mm_add_ps(resA, resB));
     }
