@@ -13,7 +13,7 @@ SIMD programming, or vector programming, is the same as normal programming, but 
 Over the years, many SIMD instruction sets have been released as CPUs evolved. Each of them is different, which is one of the biggest problems in SIMD programming, as you can easily write code that works on one CPU, but doesn't on another because the instruction set supported is different. On x86, used in the big consoles (except Switch) and PCs, we have SSE, AVX, and AVX512. On ARM (phones, Nintendo Switch) we have NEON and SVE, and on RISC-V CPUs we see RVV. Each of those have their own gotchas and properties, so generally an algorithm will have to be written for the sets that are supported on whatever CPUs you are targeting. 
 
 ## X86 (PC) SIMD sets
-- SSE4 : According to Steam Hardware survey, supported on 99.78% of PCs. Good as a baseline. This set is 128 bits per register, which means its 4-wide on floating point operations. 
+- SSE4 : According to Steam Hardware survey, supported on 99.78% of PCs. Good as a baseline. This set is 128 bits per register, which means it's 4-wide for floating-point operations. 
 - AVX : Essentially a wider version of SSE, it moves into 256 bits per register, for 8-wide floating point operations. AVX1 is supported by 97.24% of gaming PCs, and AVX2 is supported by 95.03% of PCs. AVX2 mostly adds a few instructions for shuffling data around, and 8-wide integer operations. Because AVX was designed to run on SSE4-compatible CPU math units, a lot of the operations have a weird "half and half" execution, where it applies separately to the first 4 numbers and the next 4 numbers. This will be something to take into mind when programming it. Some AVX CPUs have support for the optional "FMA" extension, which adds the possibility of multiplying and adding values as 1 operation, which can 2x the speed of many common graphics operations. 
 - AVX512 : While it keeps the AVX name, it's a complete rewrite from the AVX1-2 instruction set, with fully different instructions. This is currently the most advanced shipped instruction set, with 512-wide registers that fit 16 floats at a time, but also an extensive set of masking systems and handy instructions that make writing advanced algorithms much, much easier than in AVX2. Sadly, it's at sub-20% support on gaming PCs, thanks to Intel dropping it from many consumer CPUs. Not relevant for games due to low support.
 
@@ -39,7 +39,7 @@ You can also have your normal compiler output vector operations, if you give the
 
 Direct assembly is an option too for some *very* heavy kernels. The FFmpeg video encoding library does this, but it's only really something to keep for the hottest of hot code. You can often get a 20% speedup with handwritten SIMD assembly instead of using intrinsics, as you can directly control the registers and timing of instructions. This is the most advanced option, and generally never used in game dev due to the maintenance burden and how hard it is to actually beat the compiler.
 We have a hierarchy here from hardest but fastest, to simplest but slowest: Assembly -> Intrinsics -> SIMD Libraries -> ISPC -> enabling vectors in the compiler
-This article will focus on SIMD intrinsics, as its a great way to learn what these operations are doing without the abstraction of the libraries.
+This article will focus on SIMD intrinsics, as it's a great way to learn what these operations are doing without the abstraction of the libraries.
 
 # Hello SIMD
 So what's the simplest thing to use SIMD for? Every tutorial always starts with the same thing, adding 2 arrays of numbers together, or multiplying them together, so let's just do that.
@@ -56,7 +56,7 @@ void add_arrays(float* A, float* B, size_t count){
 
 ![map]({{site.baseurl}}/diagrams/simd/scalar_add.svg)
 
-This is a very simple function where we have 2 arrays of floats and we add the second one to the first. We will be using SSE4 for this, which does operations 4 numbers at a time, so to think of it, lets unroll this code in sets of 4
+This is a very simple function where we have 2 arrays of floats and we add the second one to the first. We will be using SSE4 for this, which does operations 4 numbers at a time, so to think of it, let's unroll this code in sets of 4
 ```cpp
 
 //Adds B to A. The arrays must have the same size
@@ -77,11 +77,11 @@ void add_arrays_unroll4(float* A, float* B, size_t count){
 
 ```
 
-We immediately run into a problem here. If we are doing operations in groups of 4, how do we deal with a non-4-divisible workload? We have to add a scalar (non-vector) path at the end to do the stragglers. This happens the same with any SIMD code, and a common way of dealing with it is padding the workload to a multiple of 4 or 8. 
+We immediately run into a problem here. If we are doing operations in groups of 4, how do we deal with a non-4-divisible workload? We have to add a scalar (non-vector) path at the end to do the stragglers. This happens the same with any SIMD code, and a common way of dealing with it is padding the workload to a multiple of 4 or 8.
 
-With the function unrolled, lets try to look into the [Intel SIMD reference](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#techs=SSE_ALL) document, to try to find what we could be using here.  As our goal is to target SSE for this, we tick the "SSE Family" checkbox at the left. Now we can search for `add` and see there are a lot of possible operations. 
+With the function unrolled, let's try to look into the [Intel SIMD reference](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#techs=SSE_ALL) document, to try to find what we could be using here. As our goal is to target SSE for this, we tick the "SSE Family" checkbox at the left. Now we can search for `add` and see there are a lot of possible operations.
 
-I heavily recommend you look at the instructions i mention here in the documentation, as this documentation is the SIMD bible and will tell you what cpus support each instruction and how fast the instruction is.
+I heavily recommend you look at the instructions I mention here in the documentation, as this documentation is the SIMD bible and will tell you what CPUs support each instruction and how fast the instruction is.
 
 The one we actually want is `_mm_add_ps`. This takes 2 `__m128` values (referencing the 128-bit registers) and adds them together.
 This isn't taking a float* or similar, so we need to first load our values into SIMD registers. There are many ways of doing it, but the one we want here is `_mm_loadu_ps` which takes a float* and loads it into a vector. In the same way, we want the store too as `_mm_storeu_ps`, to take our vector register with the math operation, and save it back to memory.
@@ -105,7 +105,7 @@ void add_arrays_sse(float* A, float* B, size_t count){
         _mm_storeu_ps(A + i, _mm_add_ps(vA,vB));
     }
 
-    //loop terminator. What if the loop isnt a multiple of 4?
+    //loop terminator. What if the loop isn't a multiple of 4?
     for(; i < count; i++){
         A[i] += B[i]; 
     }
@@ -115,9 +115,9 @@ void add_arrays_sse(float* A, float* B, size_t count){
 
 ![map]({{site.baseurl}}/diagrams/simd/wide_add.svg)
 
-We are using a bit of vector math to index the arrays for the `_mm_loadu_ps`, loading the data into the simd vectors, and then doing our math and storing it. This loop should be almost 4x faster than the scalar version.
+We are using a bit of vector math to index the arrays for the `_mm_loadu_ps`, loading the data into the SIMD vectors, and then doing our math and storing it. This loop should be almost 4x faster than the scalar version.
 
-But this is the SSE version, which is 4-wide. What if we want to do it as 8-wide using AVX? We go back to the intrinsic reference, and find the avx version of the same load, store, and add functions. This gives us `_mm256_load_ps`, `_mm256_store_ps`, and ` _mm256_add_ps`, same thing, but using `__mm256` vector variables instead of the `__mm128` ones, so 8 floats, not 4. Loop looks like this
+But this is the SSE version, which is 4-wide. What if we want to do it as 8-wide using AVX? We go back to the intrinsic reference, and find the AVX version of the same load, store, and add functions. This gives us `_mm256_load_ps`, `_mm256_store_ps`, and ` _mm256_add_ps`, same thing, but using `__mm256` vector variables instead of the `__mm128` ones, so 8 floats, not 4. Loop looks like this
 
 ```cpp
 
@@ -134,7 +134,7 @@ void add_arrays_avx(float* A, float* B, size_t count){
         _mm256_storeu_ps(A + i, _mm256_add_ps(vA,vB));
     }
 
-    //loop terminator. What if the loop isnt a multiple of 8?
+    //loop terminator. What if the loop isn't a multiple of 8?
     for(; i < count; i++){
         A[i] += B[i]; 
     }
@@ -158,7 +158,7 @@ void add_arrays_neon(float* A, float* B, size_t count){
         vst1q_f32(A + i, vaddq_f32(vA,vB));
     }
 
-    //loop terminator. What if the loop isnt a multiple of 4?
+    //loop terminator. What if the loop isn't a multiple of 4?
     for(; i < count; i++){
         A[i] += B[i]; 
     }
@@ -194,7 +194,7 @@ This diagram shows what is going on in here. Visualizing and drawing the algorit
 
 In a matrix multiplication, for each of the elements in the matrix, we are doing a dot product of the row of one matrix and the column of another. In this algorithm, we have a couple ways of parallelizing it.
 
-We could try to parallelize the dot product itself for each individual result element. this means we need to do 16 loops, and on each, load a column vector and a row vector, then do `_mm_dp_ps` to do the dot product itself. Due to the data patterns, this is not a good option. Too many instructions total and too much data shuffling due to the column vectors. If the matrix was transposed, this could be a better option. But its not.
+We could try to parallelize the dot product itself for each individual result element. This means we need to do 16 loops, and on each, load a column vector and a row vector, then do `_mm_dp_ps` to do the dot product itself. Due to the data patterns, this is not a good option. Too many instructions total and too much data shuffling due to the column vectors. If the matrix was transposed, this could be a better option. But it's not.
 
 The other option would be to parallelize the dot product calculation, and do 4 dot products at once, for filling an entire row of the result.
 
@@ -206,14 +206,14 @@ Looking at the matrix multiplication, we can see that for one row of the result,
 Let's implement that. First, we will load the entire first matrix to variables, as it's going to be shared for all the calculations.
 
 ```cpp
-    //load the entire m1 matrix to simd registers
+    //load the entire m1 matrix to SIMD registers
     __m128  a = _mm_load_ps(&m1[0][0]);
     __m128  b = _mm_load_ps(&m1[1][0]);
     __m128  c = _mm_load_ps(&m1[2][0]);
     __m128  d = _mm_load_ps(&m1[3][0]);
 ```
 
-SSE does not have scalar by vector multiplication, so if we want to multiply a vector by a single number, we will need to convert that single number into a vector, with the value duplicated. To do that, we are going to load one row from m2 in a single simd load, and then use shuffling to create 4 vectors with the x,y,z,w values each duplicated across all lanes.
+SSE does not have scalar by vector multiplication, so if we want to multiply a vector by a single number, we will need to convert that single number into a vector, with the value duplicated. To do that, we are going to load one row from m2 in a single SIMD load, and then use shuffling to create 4 vectors with the x,y,z,w values each duplicated across all lanes.
 
 ```cpp
 __m128 col = _mm_load_ps(&m2[i][0]);
@@ -240,7 +240,7 @@ The last part of the algorithm is to perform the actual dot product calculation,
 The full algorithm looks like this.
 ```cpp
 void matmul4x4(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
-    //load the entire m1 matrix to simd registers
+    //load the entire m1 matrix to SIMD registers
     __m128  a = _mm_load_ps(&m1[0][0]);
     __m128  b = _mm_load_ps(&m1[1][0]);
     __m128  c = _mm_load_ps(&m1[2][0]);
@@ -266,12 +266,12 @@ void matmul4x4(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
 }
 ```
 
-There are actually a fair few ways of doing a 4x4 matmul, as it can change depending on how your matrix is laid out in memory. This version works for how GLM does things, and its similar to how they themselves vectorize it.
+There are actually a fair few ways of doing a 4x4 matmul, as it can change depending on how your matrix is laid out in memory. This version works for how GLM does things, and it's similar to how they themselves vectorize it.
 
 # Checking the assembly
 With Godbolt, we can see what is actually going on when the compiler deals with our code. Open this link to the code from the article [HERE](https://godbolt.org/z/n7WGnMnKa). Compiling both the array add and the matmul using the latest Clang with optimizations enabled, we can see a few interesting things.
 
-The array additions have been autovectorized. The base version and the 4-unroll version have almost the exact same assembly code generated. The compiler is adding a check at the start of the function to see if the arrays are overlapping, and managed to vectorize the code by itself. On the version we vectorized ourselves, its still unrolling the loop.
+The array additions have been autovectorized. The base version and the 4-unroll version have almost the exact same assembly code generated. The compiler is adding a check at the start of the function to see if the arrays are overlapping, and managed to vectorize the code by itself. On the version we vectorized ourselves, it's still unrolling the loop.
 
 On the other hand, this is not the case with the matrix multiply. The compiler has completely failed to see through the code, and instead has decided to unroll the 2 inner loops of the matrix multiply. On the SIMD version, it has unrolled the outer loop, making it so the function doesn't loop at all.
 
@@ -290,7 +290,7 @@ matmul_scalar       2.05 ns         1.22 ns    604972588
 matmul_vector       1.62 ns        0.665 ns   1037437903
 ```
 
-So we see something interesting. Turns out the autovectorization of the addition loop is almost 2x faster than our intrinsics version. Both the SSE version and AVX one. This is why its important to measure and keep track of things, as our work here on the addition loop has proven itself to be useless, as the compiler can optimize things better here. 
+So we see something interesting. Turns out the autovectorization of the addition loop is almost 2x faster than our intrinsics version. Both the SSE version and AVX one. This is why it's important to measure and keep track of things, as our work here on the addition loop has proven itself to be useless, as the compiler can optimize things better here. 
 
 On the matmul, we see the opposite. Our SIMD version is 2x faster vs. the scalar version. This is mostly what we normally would expect from an algorithm like this. While we are doing math 4-wide, there is overhead on moving data from SIMD registers and back from them. Meanwhile the CPU has multiple execution ports for simple float additions and multiplications, so it's already auto-parallelizing the code by itself. Normally it's rare to reach real 4x faster code, but 2 to 3x faster is common. If you do full 8-wide things with AVX you can reach 6x speedups against scalar.
 
@@ -299,7 +299,7 @@ For these benchmarks, I've enabled the `-mavx` flag in the compiler, which lets 
 
 ```cpp
 void matmul4x4_avx(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
-    //load the entire m1 matrix to simd registers
+    //load the entire m1 matrix to SIMD registers
     __m128  a = _mm_load_ps(&m1[0][0]);
     __m128  b = _mm_load_ps(&m1[1][0]);
     __m128  c = _mm_load_ps(&m1[2][0]);
@@ -329,7 +329,7 @@ While AVX is about 8-wide SIMD, it brings new things to 4-wide vectors too, and 
 # Frustum culling
 Let's look into another algorithm commonly seen in graphics engines: frustum culling. We will be basing it on the one in [Learn OpenGL](https://learnopengl.com/Guest-Articles/2021/Scene/Frustum-Culling), but converting it to SIMD. You can read the article to understand what exact math operations we are dealing with.
 
-For the frustum culling algorithm, we need to test 6 planes against a sphere per object. We have 2 main possibilities here. We could SIMD it in a horizontal fashion, culling the set of 6 planes against 8 objects at a time. We could also do it vertically, and do one object at a time, but calculating the 6 planes at once. Sadly it's 6 planes which means we have a leftover if we do 4-wide, or it's too small if we do 8-wide. For this algorithm, people have done both versions depending on the game engine and CPU. We are going to make it work. We are going to parallelize across the objects, culling 8 of them at a time, to demonstrate a few more advanced techniques.
+For the frustum culling algorithm, we need to test 6 planes against a sphere per object. We have 2 main possibilities here. We could SIMD it in a horizontal fashion, culling the set of 6 planes against 8 objects at a time. We could also do it vertically, and do one object at a time, but calculating the 6 planes at once. Sadly it's 6 planes which means we have a leftover if we do 4-wide, or it's too small if we do 8-wide. For this algorithm, people have done both versions depending on the game engine and CPU. We are going to implement the horizontal approach, parallelizing across the objects and culling 8 of them at a time, to demonstrate a few more advanced techniques.
 
 Let's look at what exact code we are dealing with, in the scalar version. I've adapted the code from the Learn OpenGL article a bit to shorten it.
 
@@ -380,7 +380,7 @@ To start with, we are going full branchless, and we will just not branch, instea
 We have another problem too. We don't have a clear axis to pack data for the vectors. Unlike with the matrix, we can't just take a row as a vector. For that, we are going to modify the algo to a Structure of Arrays layout. Instead of having each sphere as 1 struct, we will use 1 struct to hold 8 spheres. This way we have our clear vectors for all the logic. 
 
 ```cpp
-//group 8 spheres in SoA layout, aligned as 32 bytes so that its well aligned to AVX 
+//group 8 spheres in SoA layout, aligned to 32-byte boundaries so that it's well aligned for AVX 
 struct alignas(32) SpherePack{
 
     float center_x[8];
@@ -408,7 +408,7 @@ We will be creating a new cull function, where we send it the float* pointers of
 
 uint8_t isOnFrustum(const Frustum& camFrustum, const SpherePack& spheres)
 {
-    uint8_t visibility = 0xFF; //begin with it set to true.
+    uint8_t visibility = 0xFF; // begin with it set to true.
     for(int i = 0 ; i < 6; i++ )
     {
         visibility &= spheres.isOnOrForwardPlane(camFrustum.faces[i]);
@@ -471,7 +471,7 @@ We begin by calculating the dot product and plane distance, and then we can comp
 
 During our algorithm loop we will be repeating the same loads on the sphere on each of the 6 iterations of the loop. Let's hope the compiler can optimize that out as it would save perf.
 
-We now have our wide frustum cull function,which culls 8 spheres at a time. 
+We now have our wide frustum cull function, which culls 8 spheres at a time. 
 
 There is still the issue of the branching in the loop, as looping 6 times can be unnecessary. We can add this branch to the loop to exit out of it. Under benchmark testing, this was a wash if it improved perf or not, as the branch is unpredictable and we are taking data "out" of the vector registers which has a bit of latency. The cull function itself is quite fast, so the latency of grabbing the mask and checking it in the branch can be larger than the cost of just doing the next loop of the cull. Unrolling this loop and interleaving operations would help, but it complicates the code a lot. This is a change of the algorithm that has to be benchmarked on the individual target CPUs to see if it's a win or not.
 
@@ -479,7 +479,7 @@ There is still the issue of the branching in the loop, as looping 6 times can be
 
 uint8_t isOnFrustum(const Frustum& camFrustum, const SpherePack& spheres)
 {
-    uint8_t visibility = 0xFF; //begin with it set to true.
+    uint8_t visibility = 0xFF; // begin with it set to true.
     for(int i = 0 ; i < 6; i++ )
     {
         visibility &= spheres.isOnOrForwardPlane(camFrustum.faces[i]);
@@ -487,7 +487,7 @@ uint8_t isOnFrustum(const Frustum& camFrustum, const SpherePack& spheres)
         if(visibility == 0)
         {
             return visibility; // stop here
-        } 
+        }
     }
 
     return visibility;
@@ -498,17 +498,17 @@ This demonstrates culling operations wide, 8 items at a time. You can also try t
 
 # FMA (Floating Multiply-Add)
 
-There is still one last thing to demonstrate here. As you have seen, dot products are a very common operation in graphics. Matrix mul uses them, and so does frustum culling. When doing dot products we are doing both multiplies and adds. 
+There is still one last thing to demonstrate here. As you have seen, dot products are a very common operation in graphics. Matrix mul uses them, and so does frustum culling. When doing dot products we are doing both multiplies and adds.
 
-In some CPUs, there is support for the FMA extra instructions, which let you do multiply and add in one single operation. Not all CPUs support it, but when they do support it, its pretty much 2x faster, as you are doing 1 operation to do both add and multiply vs 2 operations, and if you look at the instruction performance tables, the cost of a multiply-add is the same as a single multiply, so its essentially free perf. The operation is `(a * b) + c`. It does the multiply first, and then adds. There are variants where it subtracts.
+In some CPUs, there is support for the FMA extra instructions, which let you do multiply and add in one single operation. Not all CPUs support it, but when they do support it, it's pretty much 2x faster, as you are doing 1 operation to do both add and multiply vs. 2 operations, and if you look at the instruction performance tables, the cost of a multiply-add is the same as a single multiply, so it's essentially free perf. The operation is `(a * b) + c`. It does the multiply first, and then adds. There are variants where it subtracts.
 
-Let's look at how can we use FMA to make things faster. Keep in mind only some CPUs have them, like Ryzens and some modern Intel CPUs, but the support is less widespread than AVX2 by itself. As FMA is a separate feature flag, there are AVX1-only CPUs that have FMA, while also AVX2 CPUs that don't. You must check before using it.
+Let's look at how we can use FMA to make things faster. Keep in mind only some CPUs have them, like Ryzens and some modern Intel CPUs, but the support is less widespread than AVX2 by itself. As FMA is a separate feature flag, there are AVX1-only CPUs that have FMA, while also AVX2 CPUs that don't. You must check before using it.
 
-For the matrix multiply, if we move it to use FMA it looks like this. 
+For the matrix multiply, if we move it to use FMA, it looks like this.
 
 ```cpp
 void matmul4x4_avx_fma(const mat4x4& m1, const mat4x4& m2, mat4x4& out){
-    //load the entire m1 matrix to simd registers
+    //load the entire m1 matrix to SIMD registers
     __m128  a = _mm_load_ps(&m1[0][0]);
     __m128  b = _mm_load_ps(&m1[1][0]);
     __m128  c = _mm_load_ps(&m1[2][0]);
