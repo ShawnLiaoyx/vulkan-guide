@@ -117,7 +117,7 @@ void add_arrays_sse(float* A, float* B, size_t count){
 
 We are using a bit of vector math to index the arrays for the `_mm_loadu_ps`, loading the data into the SIMD vectors, and then doing our math and storing it. This loop should be almost 4x faster than the scalar version.
 
-But this is the SSE version, which is 4-wide. What if we want to do it as 8-wide using AVX? We go back to the intrinsic reference, and find the AVX version of the same load, store, and add functions. This gives us `_mm256_load_ps`, `_mm256_store_ps`, and ` _mm256_add_ps`, same thing, but using `__mm256` vector variables instead of the `__mm128` ones, so 8 floats, not 4. Loop looks like this
+But this is the SSE version, which is 4-wide. What if we want to do it as 8-wide using AVX? We go back to the intrinsic reference, and find the AVX version of the same load, store, and add functions. This gives us `_mm256_load_ps` , `_mm256_store_ps`, and `_mm256_add_ps`, same thing, but using `__mm256` vector variables instead of the `__mm128` ones, so 8 floats, not 4. Loop looks like this
 
 ```cpp
 
